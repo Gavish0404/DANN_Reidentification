@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from tqdm import tqdm
 torch.manual_seed(0)
 
 def pairwise_cosine_similarity(features):
@@ -14,19 +15,26 @@ class FeatureExtractor(nn.Module):
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, padding=3)  # (7x7 filter)  # output size: 32x32
         self.conv2 = nn.Conv2d(64, 128, kernel_size=5, padding=2)  # (5x5 filter) # output size: 16x16
         self.pool = nn.MaxPool2d(2, 2)
+        self.conv3 = nn.Conv2d(128, 256, kernel_size=3, padding=1)  # (3x3 filter) # output size: 8x8
+        self.conv4 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
+
+
         self.relu = nn.Tanh()
-        self.fc = nn.Linear(128 * 8 * 8, 500)  # Assuming input image size is 32x32
+        self.fc = nn.Linear(512 * 32 * 12, 500)  # Assuming input image size is 32x32
+        self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
         x = self.pool(self.relu(self.conv1(x)))
-        # print(x.size())
-        x = self.pool(self.relu(self.conv2(x)))
-        # print(x.size())
+        x = self.relu(self.conv2(x))
+        x = self.pool(self.relu(self.conv3(x)))
+        x = self.dropout(x)
+        x = self.relu(self.conv4(x))
         x = x.view(x.size(0), -1)
-        # print(x.size())
         x = self.fc(x)
         # print(x.size())
         return x  # 500-dimensional descriptor
+    
+
 
 # Gradient reversal layer
 class GradReverse(torch.autograd.Function):
@@ -77,14 +85,14 @@ def load_images1():
         if filename.endswith('.png') and filename.startswith('img'):
             img_path = os.path.join(path_cam_a, filename)
             img = Image.open(img_path).convert('RGB')
-            img = img.resize((32, 32))
+            img = img.resize((48, 128))
             images_a.append(np.array(img))
     
     for filename in os.listdir(path_cam_b):
         if filename.endswith('.png') and filename.startswith('img'):
             img_path = os.path.join(path_cam_b, filename)
             img = Image.open(img_path).convert('RGB')
-            img = img.resize((32, 32))
+            img = img.resize((48, 128))
             images_b.append(np.array(img))
     
     images_a = np.array(images_a)
@@ -106,14 +114,14 @@ def load_images2():
         if filename.endswith('.bmp'):
             img_path = os.path.join(path_cam_a, filename)
             img = Image.open(img_path).convert('RGB')
-            img = img.resize((32, 32))
+            # img = img.resize((32, 32))
             images_a.append(np.array(img))
     
     for filename in os.listdir(path_cam_b):
         if filename.endswith('.bmp'):
             img_path = os.path.join(path_cam_b, filename)
             img = Image.open(img_path).convert('RGB')
-            img = img.resize((32, 32))
+            # img = img.resize((32, 32))
             images_b.append(np.array(img))
     
     images_a = np.array(images_a)
@@ -157,6 +165,10 @@ source_cam2 = ideal_dim(source_cam2_dmy)
 target_cam1 = ideal_dim(target_cam1_dmy)
 target_cam2 = ideal_dim(target_cam2_dmy)
 
+print(source_cam1.shape)
+print(source_cam2.shape)
+print(target_cam1.shape)
+print(target_cam2.shape)
 
 source_img = torch.cat((source_cam1, source_cam2), dim=0)
 target_img = torch.cat((target_cam1, target_cam2), dim=0)
@@ -172,7 +184,7 @@ for i in range(target_cam1.shape[0]):
 source_loader = list(zip(source_img, source_label))
 target_loader = list(zip(target_img, target_label))
 
-num_epochs = 400
+num_epochs = 20
 
 import torch.optim.sgd
 from torch.utils.data import DataLoader, TensorDataset
@@ -192,13 +204,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # load the model
 feature_extractor = FeatureExtractor()
-feature_extractor.load_state_dict(torch.load('feature_extractor.pth'))
+# feature_extractor.load_state_dict(torch.load('feature_extractor.pth'))
 feature_extractor = feature_extractor.to(device)
 domain_classifier = DomainClassifier()
-domain_classifier.load_state_dict(torch.load('domain_classifier.pth'))
+# domain_classifier.load_state_dict(torch.load('domain_classifier.pth'))
 domain_classifier = domain_classifier.to(device)
 descriptor_predictor = DescriptorPredictor()
-descriptor_predictor.load_state_dict(torch.load('descriptor_predictor.pth'))
+# descriptor_predictor.load_state_dict(torch.load('descriptor_predictor.pth'))
 descriptor_predictor = descriptor_predictor.to(device)
 
 
@@ -232,7 +244,7 @@ def binomial_deviance_loss(similarity_matrix, labels, alpha=2, beta=0.5, c=2):
     return loss
     
 
-for epoch in range(num_epochs):
+for epoch in tqdm(range(num_epochs)):
     print("Epoch: ", epoch)
     dom_loss = 0
     verif_loss = 0
