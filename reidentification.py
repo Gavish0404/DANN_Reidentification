@@ -14,7 +14,7 @@ class FeatureExtractor(nn.Module):
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, padding=3)  # (7x7 filter)  # output size: 32x32
         self.conv2 = nn.Conv2d(64, 128, kernel_size=5, padding=2)  # (5x5 filter) # output size: 16x16
         self.pool = nn.MaxPool2d(2, 2)
-        self.relu = nn.ReLU()
+        self.relu = nn.Tanh()
         self.fc = nn.Linear(128 * 8 * 8, 500)  # Assuming input image size is 32x32
 
     def forward(self, x):
@@ -46,9 +46,10 @@ class DomainClassifier(nn.Module):
         self.fc1 = nn.Linear(500, 500)
         self.fc2 = nn.Linear(500, 1)
 
-    def forward(self, x, alpha=1.0):
+    def forward(self, x, alpha=10):
         x = GradReverse.apply(x, alpha)
-        x = F.relu(self.fc1(x))
+        # x = F.relu(self.fc1(x))
+        x = F.tanh(self.fc1(x))
         x = torch.sigmoid(self.fc2(x))
         return x
 
@@ -171,7 +172,7 @@ for i in range(target_cam1.shape[0]):
 source_loader = list(zip(source_img, source_label))
 target_loader = list(zip(target_img, target_label))
 
-num_epochs = 200
+num_epochs = 400
 
 import torch.optim.sgd
 from torch.utils.data import DataLoader, TensorDataset
@@ -185,14 +186,26 @@ target_loader = DataLoader(target_dataset, batch_size=128, shuffle=True)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-feature_extractor = FeatureExtractor().to(device)
-domain_classifier = DomainClassifier().to(device)
-descriptor_predictor = DescriptorPredictor().to(device)
+# feature_extractor = FeatureExtractor().to(device)
+# domain_classifier = DomainClassifier().to(device)
+# descriptor_predictor = DescriptorPredictor().to(device)
+
+# load the model
+feature_extractor = FeatureExtractor()
+feature_extractor.load_state_dict(torch.load('feature_extractor.pth'))
+feature_extractor = feature_extractor.to(device)
+domain_classifier = DomainClassifier()
+domain_classifier.load_state_dict(torch.load('domain_classifier.pth'))
+domain_classifier = domain_classifier.to(device)
+descriptor_predictor = DescriptorPredictor()
+descriptor_predictor.load_state_dict(torch.load('descriptor_predictor.pth'))
+descriptor_predictor = descriptor_predictor.to(device)
+
 
 optimizer = torch.optim.Adam(
     list(feature_extractor.parameters()) +
     list(domain_classifier.parameters()) +
-    list(descriptor_predictor.parameters()), lr=0.01
+    list(descriptor_predictor.parameters()), lr=0.001
 )
 
 from sklearn.metrics import log_loss
@@ -215,7 +228,7 @@ def binomial_deviance_loss(similarity_matrix, labels, alpha=2, beta=0.5, c=2):
     # # loss = (pos_loss + neg_loss).mean()
     # # return loss
     loss = torch.log(1 + torch.exp(-alpha * (similarity_matrix - beta) * M))
-    loss = loss.mean()*loss.size(0)
+    loss = loss.mean()*(loss.size(0))
     return loss
     
 
@@ -280,6 +293,10 @@ for epoch in range(num_epochs):
         torch.save(descriptor_predictor.state_dict(), 'descriptor_predictor.pth')
 
 
+
+torch.save(feature_extractor.state_dict(), 'feature_extractor.pth')
+torch.save(domain_classifier.state_dict(), 'domain_classifier.pth')
+torch.save(descriptor_predictor.state_dict(), 'descriptor_predictor.pth')
 # # Save the model
 # torch.save(feature_extractor.state_dict(), 'pfeature_extractor.pth')
 
@@ -303,6 +320,40 @@ print("Model saved")
 
 import numpy as np
 import matplotlib.pyplot as plt
+
+
+# max_idx = np.zeros(target_img.shape[0]//2)
+max_idx = np.zeros(source_img.shape[0]//2)
+# send max_idx to device
+max_idx = torch.tensor(max_idx, dtype=torch.float32).to(device)
+# send target_img to device
+source_img = source_img.to(device)
+
+features = feature_extractor(source_img)
+similarity = pairwise_cosine_similarity(features)
+
+rank_array = []
+for i in range(source_img.shape[0]//2):
+    target = similarity[i][i+source_img.shape[0]//2]
+    rnk = 1
+    for j in range(source_img.shape[0]):
+        if similarity[i][j] > target:
+            rnk += 1
+    rank_array.append(rnk)
+print(rank_array)
+
+rnk = np.array(rank_array)
+print(rnk.mean())
+
+
+# plot cdf of rnk
+plt.hist(rnk, bins=50, cumulative=True, color='blue', alpha=0.5)
+plt.xlabel('Rank')
+plt.ylabel('Cumulative Frequency')
+plt.title('CDF of Rank')
+plt.grid()
+plt.show()
+
 
 
 max_idx = np.zeros(target_img.shape[0]//2)
