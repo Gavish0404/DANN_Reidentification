@@ -1,6 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+torch.manual_seed(0)
+
+def pairwise_cosine_similarity(features):
+    normed = F.normalize(features, p=2, dim=-1)
+    return torch.matmul(normed, normed.t())
 
 # Feature extractor (Siamese CNN)
 class FeatureExtractor(nn.Module):
@@ -62,8 +67,8 @@ def load_images1():
     from PIL import Image
     import numpy as np
 
-    path_cam_a = 'E:\D drive\sem 4\AIML\Project_codes\cam_a'
-    path_cam_b = 'E:\D drive\sem 4\AIML\Project_codes\cam_b'
+    path_cam_a = 'Reidentification_Datasets/PRIM/cam_a'
+    path_cam_b = 'Reidentification_Datasets/PRIM/cam_b'
     images_a = []
     images_b = []
 
@@ -91,8 +96,8 @@ def load_images2():
     from PIL import Image
     import numpy as np
 
-    path_cam_a = 'E:\D drive\sem 4\AIML\Project_codes\VIPeR\cam_a'
-    path_cam_b = 'E:\D drive\sem 4\AIML\Project_codes\VIPeR\cam_b'
+    path_cam_a = 'Reidentification_Datasets/VIPeR/cam_a'
+    path_cam_b = 'Reidentification_Datasets/VIPeR/cam_b'
     images_a = []
     images_b = []
 
@@ -166,8 +171,9 @@ for i in range(target_cam1.shape[0]):
 source_loader = list(zip(source_img, source_label))
 target_loader = list(zip(target_img, target_label))
 
-num_epochs = 20000
+num_epochs = 200
 
+import torch.optim.sgd
 from torch.utils.data import DataLoader, TensorDataset
 
 # Create DataLoader objects with batch size 128
@@ -186,9 +192,10 @@ descriptor_predictor = DescriptorPredictor().to(device)
 optimizer = torch.optim.Adam(
     list(feature_extractor.parameters()) +
     list(domain_classifier.parameters()) +
-    list(descriptor_predictor.parameters()), lr=0.001
+    list(descriptor_predictor.parameters()), lr=0.01
 )
 
+from sklearn.metrics import log_loss
 def binomial_deviance_loss(similarity_matrix, labels, alpha=2, beta=0.5, c=2):
     """
     Binomial Deviance Loss as in Yi et al. (2014)
@@ -199,19 +206,24 @@ def binomial_deviance_loss(similarity_matrix, labels, alpha=2, beta=0.5, c=2):
     negative = 1 - labels.float()
     M = positive - negative
 
-    # Ensure similarity_matrix and labels have the same shape
-    # if similarity_matrix.size() != labels.size():
-    #     raise ValueError(f"Shape mismatch: similarity_matrix {similarity_matrix.size()} and labels {labels.size()}")
+    # # Ensure similarity_matrix and labels have the same shape
+    # # if similarity_matrix.size() != labels.size():
+    # #     raise ValueError(f"Shape mismatch: similarity_matrix {similarity_matrix.size()} and labels {labels.size()}")
 
-    # pos_loss = torch.log(1 + torch.exp(-alpha * (similarity_matrix - beta)* positive)) 
-    # neg_loss = torch.log(1 + torch.exp(c * alpha * (similarity_matrix - beta)* negative)) 
-    # loss = (pos_loss + neg_loss).mean()
-    # return loss
+    # # pos_loss = torch.log(1 + torch.exp(-alpha * (similarity_matrix - beta)* positive)) 
+    # # neg_loss = torch.log(1 + torch.exp(c * alpha * (similarity_matrix - beta)* negative)) 
+    # # loss = (pos_loss + neg_loss).mean()
+    # # return loss
     loss = torch.log(1 + torch.exp(-alpha * (similarity_matrix - beta) * M))
     loss = loss.mean()*loss.size(0)
     return loss
+    
 
 for epoch in range(num_epochs):
+    print("Epoch: ", epoch)
+    dom_loss = 0
+    verif_loss = 0
+    count = 0
     for (src_imgs, src_labels), (tgt_imgs, _) in zip(source_loader, target_loader):
         src_imgs, tgt_imgs = src_imgs.to(device), tgt_imgs.to(device)
         src_labels = src_labels.to(device)
@@ -246,13 +258,21 @@ for epoch in range(num_epochs):
         # loss_descriptor = F.mse_loss(src_descriptor_preds, src_labels.float().unsqueeze(1))
 
         # Total loss
-        print(loss_verif, loss_domain)
+        # print(loss_verif, loss_domain)
         loss_total = loss_verif + loss_domain 
-        print(epoch, loss_total.item())
+        # print(epoch, loss_total.item())
+
 
         optimizer.zero_grad()
         loss_total.backward()
         optimizer.step()
+
+        dom_loss += loss_domain.item()
+        verif_loss += loss_verif.item()
+        count += 1
+    dom_loss /= count
+    verif_loss /= count
+    print(f"Domain Loss: {dom_loss}, Verification Loss: {verif_loss}")
     if epoch % 1000 == 0:
         # save the model every 1000 epochs
         torch.save(feature_extractor.state_dict(), 'feature_extractor.pth')
@@ -269,25 +289,28 @@ for epoch in range(num_epochs):
 
 # # Load the model
 
-feature_extractor.load_state_dict(torch.load('feature_extractor.pth'))
+# feature_extractor.load_state_dict(torch.load('feature_extractor.pth'))
 
-domain_classifier.load_state_dict(torch.load('domain_classifier.pth'))
+# domain_classifier.load_state_dict(torch.load('domain_classifier.pth'))
 
-descriptor_predictor.load_state_dict(torch.load('descriptor_predictor.pth'))
+# descriptor_predictor.load_state_dict(torch.load('descriptor_predictor.pth'))
 
 # Set the model to evaluation mode
-feature_extractor.eval()
-domain_classifier.eval()
-descriptor_predictor.eval()
+print("Model saved")
+# feature_extractor.eval()
+# domain_classifier.eval()
+# descriptor_predictor.eval()
 
-
-# test this
 import numpy as np
-import torch
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
+
 max_idx = np.zeros(target_img.shape[0]//2)
+# send max_idx to device
+max_idx = torch.tensor(max_idx, dtype=torch.float32).to(device)
+# send target_img to device
+target_img = target_img.to(device)
+
 features = feature_extractor(target_img)
 similarity = pairwise_cosine_similarity(features)
 
